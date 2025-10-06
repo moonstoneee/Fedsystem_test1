@@ -5,13 +5,11 @@ import matplotlib.pyplot as plt
 import copy
 from collections import OrderedDict
 import time
-#from tqdm import tqdm
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-#import seaborn as sns  # Commented out to avoid import errors
 
 import tensorflow as tf
 from tensorflow.keras import datasets, layers, models
@@ -25,44 +23,20 @@ tf.random.set_seed(42)
 # DATA LOADING AND PREPROCESSING
 # --------------------------------------
 
-def unpickle(file):
-    """Load byte data from file"""
-    with open(file, 'rb') as fo:
-        data = pickle.load(fo, encoding='bytes')
-    return data
-
-def load_cifar10_batch(file):
-    """Load a batch of CIFAR-10 data"""
-    batch = unpickle(file)
-    data = batch[b'data'].reshape((-1, 3, 32, 32)).transpose(0, 2, 3, 1)
-    labels = np.array(batch[b'labels'])
-    return data, labels
-
-def load_cifar10(root_dir):
-    """Load the original CIFAR-10 dataset"""
-    cifar_dir = os.path.join(root_dir, 'unattacked', 'cifar-10-batches-py')
+def load_cifar10():
+    """Load CIFAR-10 using TensorFlow's built-in dataset - downloads automatically"""
+    from tensorflow.keras.datasets import cifar10
     
-    # Load training data
-    x_train = []
-    y_train = []
+    print("Loading CIFAR-10 dataset (will download if not cached)...")
+    (x_train, y_train), (x_test, y_test) = cifar10.load_data()
     
-    for i in range(1, 6):
-        batch_file = os.path.join(cifar_dir, f'data_batch_{i}')
-        data, labels = load_cifar10_batch(batch_file)
-        x_train.append(data)
-        y_train.append(labels)
+    # Flatten labels from (n, 1) to (n,)
+    y_train = y_train.flatten()
+    y_test = y_test.flatten()
     
-    x_train = np.concatenate(x_train)
-    y_train = np.concatenate(y_train)
-    
-    # Load test data
-    test_file = os.path.join(cifar_dir, 'test_batch')
-    x_test, y_test = load_cifar10_batch(test_file)
-    
-    # Load meta data
-    meta_file = os.path.join(cifar_dir, 'batches.meta')
-    meta = unpickle(meta_file)
-    classes = [label.decode('utf-8') for label in meta[b'label_names']]
+    # Get class names
+    classes = ['airplane', 'automobile', 'bird', 'cat', 'deer', 
+               'dog', 'frog', 'horse', 'ship', 'truck']
     
     print(f"CIFAR-10: {len(x_train)} training samples, {len(x_test)} test samples")
     return (x_train, y_train), (x_test, y_test), classes
@@ -479,8 +453,8 @@ class FederatedLearningSHERPA:
         # HIGH-PERFORMANCE SHERPA configuration
         default_sherpa_config = {
             'clustering_method': 'kmeans',
-            'num_features': 50,          # Optimized feature count
-            'malicious_threshold': 0.1   # Balanced sensitivity
+            'num_features': 50,
+            'malicious_threshold': 0.1
         }
         
         if sherpa_config:
@@ -533,7 +507,7 @@ class FederatedLearningSHERPA:
             batch_size=batch_size,
             verbose=0,
             callbacks=[reduce_lr],
-            validation_split=0.1  # Use small validation set for better training
+            validation_split=0.1
         )
         
         # Get updated weights
@@ -633,7 +607,7 @@ class FederatedLearningSHERPA:
             for j in range(len(client_weights)):
                 new_global_weights[i] += client_weights[j][i] * client_sizes[j] / total_size
         
-        # Apply momentum for stability (0.1 momentum with previous weights)
+        # Apply momentum for stability
         momentum = 0.05
         for i in range(len(new_global_weights)):
             new_global_weights[i] = (1 - momentum) * new_global_weights[i] + momentum * self.global_weights[i]
@@ -735,7 +709,7 @@ class FederatedLearningSHERPA:
             
             # Stop if we achieve target accuracy
             if accuracy >= 0.90:
-                print(f"🎯 Target accuracy of 90% achieved at round {round_idx+1}!")
+                print(f"Target accuracy of 90% achieved at round {round_idx+1}!")
                 break
                 
             # Early stopping if no improvement
@@ -776,7 +750,6 @@ class FederatedLearningSHERPA:
         plt.grid(True, alpha=0.3)
         
         plt.subplot(1, 3, 3)
-        # Plot improvement rate
         if len(self.accuracy_history) > 1:
             improvement = [self.accuracy_history[i] - self.accuracy_history[i-1] 
                          for i in range(1, len(self.accuracy_history))]
@@ -815,7 +788,6 @@ class FederatedLearningSHERPA:
         for round_idx, analysis in enumerate(self.sherpa_analysis_history):
             flagged = analysis.get('flagged_clients', [])
             
-            # Calculate true positives and false positives
             true_positives = len([c for c in flagged if c in self.malicious_clients])
             false_positives = len([c for c in flagged if c not in self.malicious_clients])
             
@@ -827,62 +799,52 @@ class FederatedLearningSHERPA:
             detection_by_round.append(detection_rate_round)
             
             if round_idx < 10 or round_idx % 10 == 0 or round_idx >= total_rounds - 5:
-                print(f"Round {round_idx+1}: Detected {true_positives}/{self.num_malicious} malicious, {false_positives} false positives (Rate: {detection_rate_round:.2f})")
+                print(f"Round {round_idx+1}: Detected {true_positives}/{self.num_malicious} malicious, {false_positives} false positives")
         
-        # Calculate overall statistics
         if total_malicious_present > 0:
             overall_detection_rate = total_detections / total_malicious_present
-            print(f"\nOverall Detection Rate: {overall_detection_rate:.3f} ({total_detections}/{total_malicious_present})")
+            print(f"\nOverall Detection Rate: {overall_detection_rate:.3f}")
         
         avg_false_positives = total_false_positives / total_rounds
         print(f"Average False Positives per Round: {avg_false_positives:.2f}")
         
-        # Detection stability
         if len(detection_by_round) > 10:
             recent_detection = np.mean(detection_by_round[-10:])
             print(f"Recent Detection Rate (last 10 rounds): {recent_detection:.3f}")
         
         if self.accuracy_history:
             print(f"Final Model Accuracy: {self.accuracy_history[-1]:.4f}")
-            if self.accuracy_history[-1] >= 0.90:
-                print("✅ SUCCESS: Achieved 90%+ accuracy target!")
-            elif self.accuracy_history[-1] >= 0.80:
-                print("✅ GOOD: Achieved 80%+ accuracy")
-            else:
-                print("⚠️ NEEDS IMPROVEMENT: Below 80% accuracy")
 
 # --------------------------------------
 # MAIN EXECUTION FUNCTIONS
 # --------------------------------------
 
 def run_sherpa_experiment(num_clients=10, num_malicious=2, attack_type='min_max', 
-                         aggregation='sherpa', num_rounds=60, use_iid=True):
+                         aggregation='sherpa', num_rounds=60):
     """Run high-performance SHERPA experiment"""
     
     print(f"\n{'='*70}")
     print(f"HIGH-PERFORMANCE SHERPA EXPERIMENT")
-    print(f"Target: 90% Accuracy | {num_malicious} attackers | {attack_type} attack | {aggregation} aggregation")
-    print("Using IID data distribution - OPTIMIZED FOR MAXIMUM PERFORMANCE")
+    print(f"Target: 90% Accuracy | {num_malicious} attackers | {attack_type} attack")
     print(f"{'='*70}")
     
-    # Load and preprocess data
-    print("Loading CIFAR-10 dataset...")
-    (x_train, y_train), (x_test, y_test), class_names = load_cifar10("combined_data")
+    # Load and preprocess data - AUTOMATICALLY DOWNLOADS
+    (x_train, y_train), (x_test, y_test), class_names = load_cifar10()
     x_train, y_train, x_test, y_test = preprocess_data(x_train, y_train, x_test, y_test)
     
-    # FORCE IID data distribution for optimal performance
+    # Create IID data distribution
     print(f"Creating IID data distribution for {num_clients} clients...")
     client_data = create_iid_distribution(x_train, y_train, num_clients)
     
-    # HIGH-PERFORMANCE SHERPA configuration
+    # SHERPA configuration
     sherpa_config = {
         'clustering_method': 'kmeans',
-        'num_features': 50,           # Optimized for balance between detection and performance
-        'malicious_threshold': 0.1    # Balanced sensitivity for high performance
+        'num_features': 50,
+        'malicious_threshold': 0.1
     }
     
-    # Initialize enhanced federated learning
-    print(f"Initializing enhanced federated learning...")
+    # Initialize federated learning
+    print(f"Initializing federated learning...")
     fl = FederatedLearningSHERPA(
         model_fn=create_model,
         client_data=client_data,
@@ -894,17 +856,17 @@ def run_sherpa_experiment(num_clients=10, num_malicious=2, attack_type='min_max'
         sherpa_config=sherpa_config if aggregation == 'sherpa' else None
     )
     
-    # Train the model with high-performance parameters
-    print("Starting enhanced federated learning training...")
+    # Train the model
+    print("Starting federated learning training...")
     accuracy_history, loss_history = fl.train(
         num_rounds=num_rounds,
-        client_epochs=5,              # More epochs for better convergence
-        client_batch_size=64,         # Larger batch size for stability
+        client_epochs=5,
+        client_batch_size=64,
         client_sample_ratio=1.0
     )
     
-    # Plot enhanced results
-    save_name = f'{aggregation}_{num_malicious}_attackers_{attack_type}_high_performance_{num_rounds}rounds.png'
+    # Plot results
+    save_name = f'{aggregation}_{num_malicious}_attackers_{num_rounds}rounds.png'
     fl.plot_results(save_path=save_name)
     
     # Analyze SHERPA performance
@@ -913,252 +875,21 @@ def run_sherpa_experiment(num_clients=10, num_malicious=2, attack_type='min_max'
     
     return fl, accuracy_history, loss_history
 
-def compare_all_methods(num_malicious=2, attack_type='min_max', num_rounds=60, use_iid=True):
-    """Compare SHERPA with baseline methods for high performance"""
-    
-    print(f"\n{'='*80}")
-    print(f"HIGH-PERFORMANCE METHOD COMPARISON")
-    print(f"Target: 90% Accuracy | {num_malicious} attackers | {attack_type} attack")
-    print("Using IID data distribution - OPTIMIZED FOR MAXIMUM PERFORMANCE")
-    print(f"{'='*80}")
-    
-    # Load and preprocess data once
-    print("Loading CIFAR-10 dataset...")
-    (x_train, y_train), (x_test, y_test), class_names = load_cifar10("combined_data")
-    x_train, y_train, x_test, y_test = preprocess_data(x_train, y_train, x_test, y_test)
-    
-    # FORCE IID data distribution
-    num_clients = 10
-    print(f"Creating IID data distribution for {num_clients} clients...")
-    client_data = create_iid_distribution(x_train, y_train, num_clients)
-    
-    # Test selected aggregation methods
-    aggregation_methods = ['sherpa', 'fedavg']  # Focus on key methods for performance
-    all_results = {}
-    
-    for method in aggregation_methods:
-        print(f"\n{'='*60}")
-        print(f"Testing {method.upper()} aggregation...")
-        print(f"{'='*60}")
-        
-        # HIGH-PERFORMANCE SHERPA configuration
-        sherpa_config = {
-            'clustering_method': 'kmeans',
-            'num_features': 50,
-            'malicious_threshold': 0.1
-        }
-        
-        # Initialize federated learning
-        fl = FederatedLearningSHERPA(
-            model_fn=create_model,
-            client_data=client_data,
-            test_data=(x_test, y_test),
-            num_clients=num_clients,
-            num_malicious=num_malicious,
-            attack_type=attack_type,
-            aggregation=method,
-            sherpa_config=sherpa_config if method == 'sherpa' else None
-        )
-        
-        # Train with high-performance parameters
-        accuracy_history, loss_history = fl.train(
-            num_rounds=num_rounds,
-            client_epochs=5,
-            client_batch_size=64,
-            client_sample_ratio=1.0
-        )
-        
-        # Store results
-        all_results[method] = {
-            'accuracy_history': accuracy_history,
-            'loss_history': loss_history,
-            'final_accuracy': accuracy_history[-1],
-            'final_loss': loss_history[-1],
-            'max_accuracy': max(accuracy_history),
-            'rounds_to_80': next((i for i, acc in enumerate(accuracy_history) if acc >= 0.8), len(accuracy_history)),
-            'rounds_to_90': next((i for i, acc in enumerate(accuracy_history) if acc >= 0.9), len(accuracy_history))
-        }
-        
-        # Analyze SHERPA performance
-        if method == 'sherpa':
-            fl.analyze_sherpa_performance()
-            all_results[method]['sherpa_analysis'] = fl.sherpa_analysis_history
-        
-        print(f"{method.upper()} Results:")
-        print(f"  - Final Accuracy: {accuracy_history[-1]:.4f}")
-        print(f"  - Max Accuracy: {max(accuracy_history):.4f}")
-        print(f"  - Rounds to 80%: {all_results[method]['rounds_to_80']}")
-        print(f"  - Rounds to 90%: {all_results[method]['rounds_to_90']}")
-    
-    # Create high-performance comparison plot
-    create_high_performance_plot(all_results, num_malicious, attack_type, num_rounds)
-    
-    return all_results
-
-def create_high_performance_plot(results, num_malicious, attack_type, num_rounds):
-    """Create enhanced comparison plot for high-performance results"""
-    plt.figure(figsize=(20, 12))
-    
-    # Plot 1: Accuracy comparison with targets
-    plt.subplot(2, 4, 1)
-    for method, data in results.items():
-        plt.plot(data['accuracy_history'], label=method.capitalize(), linewidth=3)
-    
-    plt.axhline(y=0.8, color='orange', linestyle='--', alpha=0.7, label='80% Target')
-    plt.axhline(y=0.9, color='red', linestyle='--', alpha=0.7, label='90% Target')
-    plt.title(f'Accuracy Progression (Target: 90%)\n({num_malicious} attackers, {attack_type} attack)')
-    plt.xlabel('Round')
-    plt.ylabel('Accuracy')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.ylim(0, 1)
-    
-    # Plot 2: Loss comparison
-    plt.subplot(2, 4, 2)
-    for method, data in results.items():
-        plt.plot(data['loss_history'], label=method.capitalize(), linewidth=3)
-    
-    plt.title(f'Loss Progression\n({num_malicious} attackers, {attack_type} attack)')
-    plt.xlabel('Round')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.yscale('log')
-    
-    # Plot 3: Final performance comparison
-    plt.subplot(2, 4, 3)
-    methods = list(results.keys())
-    final_accuracies = [results[method]['final_accuracy'] for method in methods]
-    max_accuracies = [results[method]['max_accuracy'] for method in methods]
-    
-    x = np.arange(len(methods))
-    width = 0.35
-    
-    plt.bar(x - width/2, final_accuracies, width, label='Final Accuracy', alpha=0.8)
-    plt.bar(x + width/2, max_accuracies, width, label='Max Accuracy', alpha=0.8)
-    plt.axhline(y=0.9, color='red', linestyle='--', alpha=0.7, label='90% Target')
-    
-    # Add value labels on bars
-    for i, (final, max_acc) in enumerate(zip(final_accuracies, max_accuracies)):
-        plt.text(i - width/2, final + 0.01, f'{final:.3f}', ha='center', va='bottom', fontweight='bold')
-        plt.text(i + width/2, max_acc + 0.01, f'{max_acc:.3f}', ha='center', va='bottom', fontweight='bold')
-    
-    plt.title('Performance Comparison')
-    plt.ylabel('Accuracy')
-    plt.xticks(x, [m.capitalize() for m in methods])
-    plt.legend()
-    plt.ylim(0, 1)
-    
-    # Plot 4: Convergence speed
-    plt.subplot(2, 4, 4)
-    rounds_to_80 = [results[method]['rounds_to_80'] for method in methods]
-    rounds_to_90 = [results[method]['rounds_to_90'] for method in methods]
-    
-    x = np.arange(len(methods))
-    width = 0.35
-    
-    plt.bar(x - width/2, rounds_to_80, width, label='Rounds to 80%', alpha=0.8)
-    plt.bar(x + width/2, rounds_to_90, width, label='Rounds to 90%', alpha=0.8)
-    
-    plt.title('Convergence Speed')
-    plt.ylabel('Rounds')
-    plt.xticks(x, [m.capitalize() for m in methods])
-    plt.legend()
-    
-    # Plot 5-8: Individual method details
-    for i, (method, data) in enumerate(results.items()):
-        plt.subplot(2, 4, 5 + i)
-        
-        # Plot accuracy with improvement highlights
-        plt.plot(data['accuracy_history'], 'b-', linewidth=2, alpha=0.8)
-        
-        # Highlight achievement points
-        acc_80_round = data['rounds_to_80']
-        acc_90_round = data['rounds_to_90']
-        
-        if acc_80_round < len(data['accuracy_history']):
-            plt.scatter([acc_80_round], [data['accuracy_history'][acc_80_round]], 
-                       color='orange', s=100, zorder=5, label='80% Achieved')
-        
-        if acc_90_round < len(data['accuracy_history']):
-            plt.scatter([acc_90_round], [data['accuracy_history'][acc_90_round]], 
-                       color='red', s=100, zorder=5, label='90% Achieved')
-        
-        plt.axhline(y=0.8, color='orange', linestyle='--', alpha=0.5)
-        plt.axhline(y=0.9, color='red', linestyle='--', alpha=0.5)
-        
-        plt.title(f'{method.capitalize()} Details\nMax: {data["max_accuracy"]:.3f}')
-        plt.xlabel('Round')
-        plt.ylabel('Accuracy')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.ylim(0, 1)
-    
-    plt.tight_layout()
-    
-    # Save the plot
-    save_name = f'high_performance_comparison_{num_malicious}_attackers_{attack_type}_{num_rounds}rounds.png'
-    plt.savefig(save_name, dpi=300, bbox_inches='tight')
-    print(f"High-performance comparison plot saved as {save_name}")
-    plt.show()
-    
-    # Print comprehensive summary
-    print(f"\n{'='*60}")
-    print(f"HIGH-PERFORMANCE EXPERIMENT SUMMARY ({num_rounds} ROUNDS)")
-    print(f"{'='*60}")
-    
-    # Rank by final accuracy
-    sorted_methods = sorted(results.items(), key=lambda x: x[1]['final_accuracy'], reverse=True)
-    
-    for i, (method, data) in enumerate(sorted_methods):
-        print(f"{i+1}. {method.upper()}:")
-        print(f"   - Final Accuracy: {data['final_accuracy']:.4f}")
-        print(f"   - Max Accuracy: {data['max_accuracy']:.4f}")
-        print(f"   - Rounds to 80%: {data['rounds_to_80']}")
-        print(f"   - Rounds to 90%: {data['rounds_to_90']}")
-        
-        if data['final_accuracy'] >= 0.90:
-            print(f"   - Status: ✅ TARGET ACHIEVED (90%+)")
-        elif data['final_accuracy'] >= 0.80:
-            print(f"   - Status: ✅ GOOD PERFORMANCE (80%+)")
-        else:
-            print(f"   - Status: ⚠️ NEEDS IMPROVEMENT")
-        print()
-    
-    if 'sherpa' in results and 'fedavg' in results:
-        sherpa_improvement = results['sherpa']['final_accuracy'] - results['fedavg']['final_accuracy']
-        print(f"SHERPA vs FedAvg Improvement: {sherpa_improvement:+.4f} accuracy")
-
-# --------------------------------------
-# MAIN FUNCTION
-# --------------------------------------
-
 def main():
-    """Main function - HIGH-PERFORMANCE SHERPA targeting 90% accuracy"""
+    """Main function"""
     
-    print("HIGH-PERFORMANCE SHERPA Federated Learning Implementation")
+    print("HIGH-PERFORMANCE SHERPA Federated Learning")
     print("="*70)
-    print("TARGET: 90% ACCURACY | FORCED IID DISTRIBUTION | ENHANCED DETECTION")
+    print("AUTO-DOWNLOADING CIFAR-10 DATASET")
     print("="*70)
     
-    # Option 1: Run high-performance SHERPA experiment
-    print("\n1. Running high-performance SHERPA experiment...")
+    # Run SHERPA experiment
     run_sherpa_experiment(
         num_clients=10,
         num_malicious=2,
         attack_type='min_max',
         aggregation='sherpa',
-        num_rounds=60,               # Increased rounds for better convergence
-        use_iid=True                 # FORCED IID for optimal performance
-    )
-    
-    # Option 2: Compare methods with high-performance settings
-    print("\n2. Comparing methods with high-performance settings...")
-    compare_all_methods(
-        num_malicious=2,
-        attack_type='min_max',
-        num_rounds=60,               # Increased rounds for convergence
-        use_iid=True                 # FORCED IID for optimal performance
+        num_rounds=60
     )
 
 if __name__ == "__main__":
